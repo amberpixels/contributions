@@ -1,0 +1,12 @@
+# What the contribution graph shows. Read by `contributions plan|apply|verify`.
+
+# 7 rows (Sunday first), one character per week: space is empty, ░▒▓█ are shades 1-4.
+pattern: art/ship-it.txt
+
+# Give every day one commit, so days without real activity show the lightest
+# shade instead of a gap.
+background: true
+
+# Commits on a darkest-shade day. 0 = auto: high enough that real activity stays
+# in the lightest shade.
+volume: 0

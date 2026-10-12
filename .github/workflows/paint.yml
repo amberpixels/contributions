@@ -1,0 +1,41 @@
+name: Paint
+
+# Redraws the contribution graph. Daily, because each new day starts as a gap
+# until it gets its background commit; on Sundays the window shifts a week and
+# the whole pattern is redrawn.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency: paint
+
+permissions:
+  contents: write
+
+jobs:
+  paint:
+    runs-on: ubuntu-latest
+    steps:
+      # The token is a personal one: it reads your calendar (GITHUB_TOKEN would
+      # read the bot's) and can push history touching .github/workflows.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CONTRIBUTIONS_TOKEN }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Checks yesterday's drawing against the live graph. Report-only: GitHub
+      # can take a while to count a push, so a mismatch is not always a bug.
+      - name: Verify
+        continue-on-error: true
+        run: go run ./cmd/contributions verify
+        env:
+          CONTRIBUTIONS_TOKEN: ${{ secrets.CONTRIBUTIONS_TOKEN }}
+
+      - name: Apply
+        run: go run ./cmd/contributions apply --push
+        env:
+          CONTRIBUTIONS_TOKEN: ${{ secrets.CONTRIBUTIONS_TOKEN }}
