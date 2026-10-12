@@ -125,11 +125,71 @@ func (r Repo) Move(ctx context.Context, branch, tip, old string) error {
 	return err
 }
 
-// Push force-pushes the branch, but only over the remote state last fetched.
-func (r Repo) Push(ctx context.Context, remote, branch string) error {
-	_, err := r.git(ctx, nil, nil, "push", "--force-with-lease="+branch, remote, "refs/heads/"+branch)
+// PushBatch caps the new commits per push. GitHub counted only the newest
+// ~1000 commits of a single 37k-commit push and silently dropped the rest.
+const PushBatch = 500
 
-	return err
+// Push force-pushes the branch oldest commits first, at most batch new commits
+// per push, each step leased on the remote state the previous one left.
+func (r Repo) Push(ctx context.Context, remote, branch string, batch int) error {
+	tip, err := r.Tip(ctx, branch)
+	if err != nil {
+		return err
+	}
+
+	// No remote branch yet: the lease "" means "must not exist".
+	lease, base := "", ""
+	if old, err := r.git(
+		ctx,
+		nil,
+		nil,
+		"rev-parse",
+		"--verify",
+		"--quiet",
+		"refs/remotes/"+remote+"/"+branch,
+	); err == nil {
+		lease = old
+		if mb, err := r.git(ctx, nil, nil, "merge-base", old, tip); err == nil {
+			base = mb
+		}
+	}
+
+	args := []string{"rev-list", "--reverse", "--first-parent", tip}
+	if base != "" {
+		args = append(args, "^"+base)
+	}
+	out, err := r.git(ctx, nil, nil, args...)
+	if err != nil {
+		return err
+	}
+	commits := strings.Fields(out)
+
+	var steps []string
+	for i := batch - 1; i < len(commits); i += batch {
+		steps = append(steps, commits[i])
+	}
+	// The tip itself, also when it is an ancestor of the remote (a shrink).
+	if len(steps) == 0 || steps[len(steps)-1] != tip {
+		steps = append(steps, tip)
+	}
+
+	ref := "refs/heads/" + branch
+	for _, sha := range steps {
+		if _, err := r.git(
+			ctx,
+			nil,
+			nil,
+			"push",
+			"--force-with-lease="+ref+":"+lease,
+			remote,
+			sha+":"+ref,
+		); err != nil {
+			return err
+		}
+		lease = sha
+	}
+
+	return nil
 }
 
 func (r Repo) firstParent(ctx context.Context, branch string) ([]commit, error) {

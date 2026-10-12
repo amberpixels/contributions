@@ -164,7 +164,7 @@ func runApply(ctx context.Context, cmd *cli.Command) error {
 	if !cmd.Bool("push") {
 		return nil
 	}
-	if err := s.repo.Push(ctx, s.cfg.Remote, s.cfg.Branch); err != nil {
+	if err := s.repo.Push(ctx, s.cfg.Remote, s.cfg.Branch, history.PushBatch); err != nil {
 		return err
 	}
 	fmt.Println("pushed to", s.cfg.Remote)

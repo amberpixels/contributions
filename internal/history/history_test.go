@@ -128,3 +128,38 @@ func TestRebuildKeepsCodeCommittedOnTop(t *testing.T) {
 		t.Errorf("tree lost files: %q", files)
 	}
 }
+
+func TestPushInBatches(t *testing.T) {
+	r := newRepo(t)
+	remote := t.TempDir()
+	run(t, remote, "init", "-q", "--bare")
+	run(t, remote, "config", "core.logAllRefUpdates", "always")
+	run(t, r.Dir, "remote", "add", "origin", remote)
+	pushes := func() int {
+		return len(strings.Split(run(t, remote, "reflog", "--format=%H", "refs/heads/main"), "\n"))
+	}
+
+	// 1 code commit + 5 pixels in batches of 2: steps at 2, 4 and the tip.
+	_, tip := apply(t, r, map[string]int{"2026-01-01": 3, "2026-01-02": 2})
+	if err := r.Push(t.Context(), "origin", "main", 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, remote, "rev-parse", "main"); got != tip {
+		t.Errorf("remote at %s, want %s", got, tip)
+	}
+	if n := pushes(); n != 3 {
+		t.Errorf("%d pushes, want 3", n)
+	}
+
+	// A rewrite force-pushes from the common base, again in batches.
+	_, tip = apply(t, r, map[string]int{"2026-01-01": 1, "2026-01-03": 2})
+	if err := r.Push(t.Context(), "origin", "main", 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, remote, "rev-parse", "main"); got != tip {
+		t.Errorf("after rewrite remote at %s, want %s", got, tip)
+	}
+	if n := pushes(); n != 5 {
+		t.Errorf("%d pushes in total, want 5", n)
+	}
+}
