@@ -1,11 +1,8 @@
 name: CI
 
-# Pixel commits change no files, so the path filter keeps the daily repaint
-# from triggering a CI run.
 on:
   push:
     branches: [main]
-    paths: ["**.go", "go.mod", "go.sum", "tools/**", "justfile", "art/**", ".github/workflows/ci.yml"]
   pull_request:
 
 permissions:

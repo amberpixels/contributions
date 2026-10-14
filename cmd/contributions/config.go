@@ -17,11 +17,11 @@ type config struct {
 	Background bool `yaml:"background"`
 	// Volume is the commit count of a darkest-shade day; 0 picks it automatically.
 	Volume int `yaml:"volume"`
-	// Branch is the branch GitHub counts contributions on: the default one.
-	Branch string `yaml:"branch"`
-	// Remote is where `apply --push` pushes.
-	Remote string `yaml:"remote"`
-	// Author overrides the identity of pixel commits. Empty fields fall back
+	// Ahead is how many future days get their background in advance.
+	Ahead int `yaml:"ahead"`
+	// Canvas is the empty GitHub repo the generated history is pushed to.
+	Canvas string `yaml:"canvas"`
+	// Author overrides the identity of canvas commits. Empty fields fall back
 	// to the GitHub login and its noreply address.
 	Author struct {
 		Name  string `yaml:"name"`
@@ -30,7 +30,7 @@ type config struct {
 }
 
 func loadConfig(path string) (config, error) {
-	c := config{Branch: "main", Remote: "origin"}
+	c := config{Ahead: 365}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -42,8 +42,8 @@ func loadConfig(path string) (config, error) {
 	if c.Pattern == "" {
 		return c, errors.New("config: pattern is required")
 	}
-	if c.Volume < 0 {
-		return c, errors.New("config: volume must be 0 (auto) or positive")
+	if c.Volume < 0 || c.Ahead < 0 {
+		return c, errors.New("config: volume and ahead must not be negative")
 	}
 
 	return c, nil

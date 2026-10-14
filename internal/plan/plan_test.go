@@ -56,7 +56,7 @@ func dot(t *testing.T) pattern.Pattern {
 
 func TestBuild(t *testing.T) {
 	cal := fakeCalendar(func(i int) int { return i % 11 }) // busiest real day: 10
-	p, err := plan.Build(cal, dot(t), nil, plan.Options{Background: true})
+	p, err := plan.Build(cal, dot(t), plan.Options{Background: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,27 +89,26 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-func TestBuildSubtractsPainted(t *testing.T) {
-	cal := fakeCalendar(func(int) int { return 0 })
-	first, err := plan.Build(cal, dot(t), nil, plan.Options{Background: true})
+func TestBuildAhead(t *testing.T) {
+	cal := fakeCalendar(func(int) int { return 0 }) // ends on a Sunday, column 52
+	p, err := plan.Build(cal, dot(t), plan.Options{Background: true, Volume: 100, Ahead: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Once drawn, the calendar counts the plan's own commits.
-	painted := first.Painted()
-	for _, week := range cal.Weeks {
-		for i := range week {
-			week[i].Count += painted[week[i].Date]
+	future := p.Days[len(p.Days)-8:]
+	// Monday..Saturday finish the current column, the next Sunday opens column 53.
+	for i, d := range future {
+		wantCol, wantRow := 52, i+1
+		if i >= 6 {
+			wantCol, wantRow = 53, i-6
+		}
+		if !d.Future || d.Col != wantCol || d.Row != wantRow || d.Add != 1 {
+			t.Errorf("ahead day %d (%s): col %d row %d add %d future %v", i, d.Date, d.Col, d.Row, d.Add, d.Future)
 		}
 	}
-	again, err := plan.Build(cal, dot(t), painted, plan.Options{Background: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.Volume != first.Volume || again.Added() != first.Added() {
-		t.Errorf("redraw changed the plan: volume %d -> %d, added %d -> %d",
-			first.Volume, again.Volume, first.Added(), again.Added())
+	if future[0].Date != "2026-10-12" || future[7].Date != "2026-10-19" {
+		t.Errorf("ahead dates %s..%s", future[0].Date, future[7].Date)
 	}
 }
 
@@ -118,7 +117,7 @@ func TestBuildTooWide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plan.Build(fakeCalendar(func(int) int { return 0 }), wide, nil, plan.Options{}); err == nil {
+	if _, err := plan.Build(fakeCalendar(func(int) int { return 0 }), wide, plan.Options{}); err == nil {
 		t.Error("expected an error for a pattern wider than the window")
 	}
 }

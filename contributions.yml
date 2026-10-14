@@ -1,4 +1,4 @@
-# What the contribution graph shows. Read by `contributions plan|apply|verify`.
+# What the contribution graph shows. Read by `contributions plan|paint|verify`.
 
 # 7 rows (Sunday first), one character per week: space is empty, ░▒▓█ are shades 1-4.
 pattern: art/ship-it.txt
@@ -9,4 +9,12 @@ background: true
 
 # Commits on a darkest-shade day. 0 = auto: high enough that real activity stays
 # in the lightest shade.
-volume: 0
+volume: 300
+
+# Days after today that get their background in advance. GitHub counts a
+# future-dated commit once its day arrives, so nothing has to run daily.
+ahead: 365
+
+# The empty repo the canvas is pushed to. To redraw: delete it on GitHub,
+# recreate it empty, `contributions paint --push` again.
+canvas: git@github.com:amberpixels/empty-spaces.git

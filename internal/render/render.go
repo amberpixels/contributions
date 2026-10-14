@@ -74,7 +74,8 @@ func SVG(p plan.Plan) string {
 	return b.String()
 }
 
-// cells lays the plan out as rows by weeks, -1 where the window has no day.
+// cells lays the plan's visible window out as rows by weeks, -1 where the
+// window has no day. Days ahead are kept only for the current week.
 func cells(p plan.Plan) [pattern.Rows][]int {
 	var grid [pattern.Rows][]int
 	for r := range grid {
@@ -84,7 +85,9 @@ func cells(p plan.Plan) [pattern.Rows][]int {
 		}
 	}
 	for _, d := range p.Days {
-		grid[d.Row][d.Col] = d.Level
+		if d.Col < p.Weeks {
+			grid[d.Row][d.Col] = d.Level
+		}
 	}
 
 	return grid

@@ -1,10 +1,11 @@
-// Command contributions draws a pattern on your GitHub contribution graph by
-// rewriting this repo's default branch as code commits plus backdated empty
-// commits, sized against your real activity.
+// Command contributions draws a pattern on your GitHub contribution graph: it
+// generates a history of empty, backdated commits sized against your real
+// activity and pushes it once into an empty repo.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,6 +17,10 @@ import (
 	"github.com/amberpixels/contributions/internal/plan"
 	"github.com/amberpixels/contributions/internal/render"
 )
+
+// canvasDir keeps the last generated canvas, so verify can check GitHub
+// counted all of it.
+const canvasDir = ".canvas"
 
 func main() {
 	app := &cli.Command{
@@ -34,16 +39,16 @@ func main() {
 				Action: runPlan,
 			},
 			{
-				Name:  "apply",
-				Usage: "rewrite the branch to draw the plan",
+				Name:  "paint",
+				Usage: "generate the canvas in " + canvasDir,
 				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "push", Usage: "force-push the branch afterwards"},
+					&cli.BoolFlag{Name: "push", Usage: "push it to the (empty) canvas repo"},
 				},
-				Action: runApply,
+				Action: runPaint,
 			},
 			{
 				Name:   "verify",
-				Usage:  "compare the live graph with the plan; fails on any mismatch",
+				Usage:  "compare the live graph with the painted canvas; fails on any mismatch",
 				Action: runVerify,
 			},
 		},
@@ -57,12 +62,13 @@ func main() {
 
 // state is everything a command needs: config, live calendar and the plan.
 type state struct {
-	cfg  config
-	cal  calendar.Calendar
-	repo history.Repo
-	plan plan.Plan
+	cfg    config
+	cal    calendar.Calendar
+	canvas history.Canvas
+	plan   plan.Plan
 }
 
+// load reads the config, fetches the calendar and builds the plan.
 func load(ctx context.Context, cmd *cli.Command) (state, error) {
 	var s state
 	var err error
@@ -80,19 +86,12 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 	if s.cal, err = calendar.Fetch(ctx, token); err != nil {
 		return s, err
 	}
+	s.canvas = history.Canvas{Dir: canvasDir}
 
-	// Subtract only pixels GitHub has seen, i.e. the pushed ones. Counting local
-	// unpushed commits would lower the real activity and change the plan on
-	// every run.
-	s.repo = history.Repo{Dir: "."}
-	painted, err := s.repo.Painted(ctx, "refs/remotes/"+s.cfg.Remote+"/"+s.cfg.Branch)
-	if err != nil {
-		return s, err
-	}
-
-	s.plan, err = plan.Build(s.cal, pat, painted, plan.Options{
+	s.plan, err = plan.Build(s.cal, pat, plan.Options{
 		Background: s.cfg.Background,
 		Volume:     s.cfg.Volume,
+		Ahead:      s.cfg.Ahead,
 	})
 
 	return s, err
@@ -112,8 +111,8 @@ func (s state) author() history.Author {
 
 func summarize(s state) {
 	fmt.Print(render.Text(s.plan))
-	fmt.Printf("\n@%s: volume %d, busiest real day %d, +%d commits\n",
-		s.cal.Login, s.plan.Volume, s.plan.RealMax, s.plan.Added())
+	fmt.Printf("\n@%s: volume %d, busiest real day %d, +%d commits (through %s)\n",
+		s.cal.Login, s.plan.Volume, s.plan.RealMax, s.plan.Added(), s.plan.Days[len(s.plan.Days)-1].Date)
 	for _, w := range s.plan.Warnings {
 		fmt.Println("warning:", w)
 	}
@@ -136,66 +135,76 @@ func runPlan(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-func runApply(ctx context.Context, cmd *cli.Command) error {
+func runPaint(ctx context.Context, cmd *cli.Command) error {
 	s, err := load(ctx, cmd)
 	if err != nil {
 		return err
 	}
 	summarize(s)
 
-	old, err := s.repo.Tip(ctx, s.cfg.Branch)
-	if err != nil {
-		return fmt.Errorf("branch %s: %w", s.cfg.Branch, err)
-	}
-	tip, err := s.repo.Rebuild(ctx, s.cfg.Branch, s.plan.Painted(), s.author())
+	tip, err := s.canvas.Create(ctx, s.plan.Painted(), s.author())
 	if err != nil {
 		return err
 	}
-	if tip == old {
-		fmt.Println("graph already drawn, nothing to do")
-
-		return nil
-	}
-	if err := s.repo.Move(ctx, s.cfg.Branch, tip, old); err != nil {
-		return err
-	}
-	fmt.Printf("%s: %s -> %s\n", s.cfg.Branch, old[:12], tip[:12])
+	fmt.Printf("canvas: %d commits in %s, tip %s\n", s.plan.Added(), canvasDir, tip[:12])
 
 	if !cmd.Bool("push") {
 		return nil
 	}
-	if err := s.repo.Push(ctx, s.cfg.Remote, s.cfg.Branch, history.PushBatch); err != nil {
+	if s.cfg.Canvas == "" {
+		return errors.New("config: canvas repo is not set")
+	}
+	if err := s.canvas.Push(ctx, s.cfg.Canvas); err != nil {
 		return err
 	}
-	fmt.Println("pushed to", s.cfg.Remote)
+	fmt.Println("pushed to", s.cfg.Canvas)
 
 	return nil
 }
 
+// runVerify checks the canvas against the live graph: every canvas commit
+// counted, and every shade what the level formula in package plan predicts.
 func runVerify(ctx context.Context, cmd *cli.Command) error {
-	s, err := load(ctx, cmd)
+	painted, err := history.Canvas{Dir: canvasDir}.Painted(ctx)
+	if err != nil {
+		return err
+	}
+	if len(painted) == 0 {
+		return errors.New("no canvas in " + canvasDir + "; run paint first")
+	}
+	token, err := calendar.Token(ctx)
+	if err != nil {
+		return err
+	}
+	cal, err := calendar.Fetch(ctx, token)
 	if err != nil {
 		return err
 	}
 
-	live := map[string]int{}
-	for _, week := range s.cal.Weeks {
+	peak := 0
+	for _, week := range cal.Weeks {
 		for _, d := range week {
-			live[d.Date] = d.Level
+			peak = max(peak, d.Count)
 		}
 	}
 
-	off := 0
-	for _, d := range s.plan.Days {
-		if got := live[d.Date]; got != d.Level {
-			fmt.Printf("%s: shade %d, want %d (real %d + %d)\n", d.Date, got, d.Level, d.Real, d.Add)
-			off++
+	off, days := 0, 0
+	for _, week := range cal.Weeks {
+		for _, d := range week {
+			days++
+			if missing := painted[d.Date] - d.Count; missing > 0 {
+				fmt.Printf("%s: %d canvas commits not counted\n", d.Date, missing)
+				off++
+			} else if want := plan.Level(d.Count, peak); d.Level != want {
+				fmt.Printf("%s: %d contributions show shade %d, formula says %d\n", d.Date, d.Count, d.Level, want)
+				off++
+			}
 		}
 	}
 	if off > 0 {
-		return fmt.Errorf("%d of %d days differ from the plan", off, len(s.plan.Days))
+		return fmt.Errorf("%d of %d days differ", off, days)
 	}
-	fmt.Printf("all %d days match the plan\n", len(s.plan.Days))
+	fmt.Printf("all %d days counted and shaded as predicted\n", days)
 
 	return nil
 }

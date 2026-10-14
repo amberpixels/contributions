@@ -51,10 +51,10 @@ tidy:
 plan:
     go run ./cmd/contributions plan --svg preview.svg
 
-# Rewrite main locally to draw the plan (no push)
-apply:
-    go run ./cmd/contributions apply
+# Generate the canvas in .canvas (no push)
+paint:
+    go run ./cmd/contributions paint
 
-# Compare the live graph with the plan
+# Check GitHub counted the whole canvas and shades as predicted
 verify:
     go run ./cmd/contributions verify

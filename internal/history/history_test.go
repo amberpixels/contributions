@@ -1,7 +1,6 @@
 package history_test
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,10 +15,6 @@ func run(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_AUTHOR_DATE=1700000000 +0000",
-		"GIT_COMMITTER_NAME=dev", "GIT_COMMITTER_EMAIL=dev@example.com", "GIT_COMMITTER_DATE=1700000000 +0000",
-	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -28,138 +23,76 @@ func run(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// newRepo returns a repo whose main branch holds one code commit.
-func newRepo(t *testing.T) history.Repo {
-	t.Helper()
-	dir := t.TempDir()
-	run(t, dir, "init", "-q", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run(t, dir, "add", "README.md")
-	run(t, dir, "commit", "-q", "-m", "init")
-
-	return history.Repo{Dir: dir}
-}
-
-// apply rebuilds main for painted and moves it, returning old and new tips.
-func apply(t *testing.T, r history.Repo, painted map[string]int) (string, string) {
-	t.Helper()
-	old, err := r.Tip(t.Context(), "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tip, err := r.Rebuild(t.Context(), "main", painted, who)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tip != old {
-		if err := r.Move(t.Context(), "main", tip, old); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	return old, tip
-}
-
-func TestRebuildPaintsAndCounts(t *testing.T) {
-	r := newRepo(t)
+func TestCreate(t *testing.T) {
+	c := history.Canvas{Dir: filepath.Join(t.TempDir(), "canvas")}
 	painted := map[string]int{"2026-01-01": 3, "2026-01-02": 1}
-	apply(t, r, painted)
 
-	got, err := r.Painted(t.Context(), "refs/heads/main")
+	tip, err := c.Create(t.Context(), painted, who)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if missing, err := r.Painted(t.Context(), "refs/remotes/origin/main"); err != nil || len(missing) != 0 {
-		t.Errorf("missing ref: painted %v, err %v", missing, err)
+	if n := run(t, c.Dir, "rev-list", "--count", "main"); n != "4" {
+		t.Errorf("%s commits, want 4", n)
+	}
+	if files := run(t, c.Dir, "ls-tree", "-r", "main"); files != "" {
+		t.Errorf("canvas has files: %q", files)
+	}
+	// Noon UTC keeps the date the same in every timezone GitHub might use.
+	if last := run(
+		t,
+		c.Dir,
+		"log",
+		"-1",
+		"--format=%ad",
+		"--date=format:%Y-%m-%d %H",
+		"main",
+	); last != "2026-01-02 12" {
+		t.Errorf("last commit dated %q", last)
+	}
+
+	got, err := c.Painted(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(got) != 2 || got["2026-01-01"] != 3 || got["2026-01-02"] != 1 {
 		t.Errorf("painted = %v, want %v", got, painted)
 	}
 
-	// Dates land at noon UTC, so the day is the same in every timezone GitHub uses.
-	dates := run(t, r.Dir, "log", "--format=%ad", "--date=format:%Y-%m-%d %H", "-n", "1", "main")
-	if dates != "2026-01-02 12" {
-		t.Errorf("last pixel dated %q", dates)
-	}
-}
-
-func TestRebuildIsDeterministic(t *testing.T) {
-	r := newRepo(t)
-	painted := map[string]int{"2026-01-01": 2}
-	_, tip := apply(t, r, painted)
-
-	// Same plan again: nothing to change.
-	if old, again := apply(t, r, painted); again != old || again != tip {
-		t.Errorf("redraw moved main: %s -> %s", old, again)
-	}
-
-	// One more day: the old tip stays an ancestor, so the push is a fast-forward.
-	painted["2026-01-02"] = 1
-	_, next := apply(t, r, painted)
-	run(t, r.Dir, "merge-base", "--is-ancestor", tip, next)
-
-	// A smaller plan drops the extra pixels.
-	delete(painted, "2026-01-02")
-	if _, back := apply(t, r, painted); back != tip {
-		t.Errorf("shrinking the plan gave %s, want %s", back, tip)
-	}
-}
-
-func TestRebuildKeepsCodeCommittedOnTop(t *testing.T) {
-	r := newRepo(t)
-	apply(t, r, map[string]int{"2026-01-01": 2})
-
-	if err := os.WriteFile(filepath.Join(r.Dir, "NOTES.md"), []byte("later\n"), 0o600); err != nil {
+	// Same input, same history: a regenerated canvas is byte-identical.
+	again, err := c.Create(t.Context(), painted, who)
+	if err != nil {
 		t.Fatal(err)
 	}
-	run(t, r.Dir, "add", "NOTES.md")
-	run(t, r.Dir, "commit", "-q", "-m", "add notes")
-
-	apply(t, r, map[string]int{"2026-01-01": 1})
-
-	subjects := run(t, r.Dir, "log", "--reverse", "--format=%s", "main")
-	want := "init\nadd notes\npixel 2026-01-01 1/1"
-	if subjects != want {
-		t.Errorf("history:\n%s\nwant:\n%s", subjects, want)
-	}
-	if files := run(t, r.Dir, "ls-tree", "--name-only", "main"); files != "NOTES.md\nREADME.md" {
-		t.Errorf("tree lost files: %q", files)
+	if again != tip {
+		t.Errorf("regenerated tip %s, want %s", again, tip)
 	}
 }
 
-func TestPushInBatches(t *testing.T) {
-	r := newRepo(t)
+func TestPaintedWithoutCanvas(t *testing.T) {
+	got, err := history.Canvas{Dir: filepath.Join(t.TempDir(), "none")}.Painted(t.Context())
+	if err != nil || len(got) != 0 {
+		t.Errorf("painted %v, err %v", got, err)
+	}
+}
+
+func TestPushOnlyIntoEmptyRepo(t *testing.T) {
 	remote := t.TempDir()
 	run(t, remote, "init", "-q", "--bare")
-	run(t, remote, "config", "core.logAllRefUpdates", "always")
-	run(t, r.Dir, "remote", "add", "origin", remote)
-	pushes := func() int {
-		return len(strings.Split(run(t, remote, "reflog", "--format=%H", "refs/heads/main"), "\n"))
+	c := history.Canvas{Dir: filepath.Join(t.TempDir(), "canvas")}
+	tip, err := c.Create(t.Context(), map[string]int{"2026-01-01": 2}, who)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// 1 code commit + 5 pixels in batches of 2: steps at 2, 4 and the tip.
-	_, tip := apply(t, r, map[string]int{"2026-01-01": 3, "2026-01-02": 2})
-	if err := r.Push(t.Context(), "origin", "main", 2); err != nil {
+	if err := c.Push(t.Context(), remote); err != nil {
 		t.Fatal(err)
 	}
 	if got := run(t, remote, "rev-parse", "main"); got != tip {
 		t.Errorf("remote at %s, want %s", got, tip)
 	}
-	if n := pushes(); n != 3 {
-		t.Errorf("%d pushes, want 3", n)
-	}
 
-	// A rewrite force-pushes from the common base, again in batches.
-	_, tip = apply(t, r, map[string]int{"2026-01-01": 1, "2026-01-03": 2})
-	if err := r.Push(t.Context(), "origin", "main", 2); err != nil {
-		t.Fatal(err)
-	}
-	if got := run(t, remote, "rev-parse", "main"); got != tip {
-		t.Errorf("after rewrite remote at %s, want %s", got, tip)
-	}
-	if n := pushes(); n != 5 {
-		t.Errorf("%d pushes in total, want 5", n)
+	// A second push would be an update, which GitHub only partly counts.
+	if err := c.Push(t.Context(), remote); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Errorf("pushing into a non-empty repo: err %v", err)
 	}
 }

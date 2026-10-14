@@ -10,6 +10,7 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/amberpixels/contributions/internal/calendar"
 	"github.com/amberpixels/contributions/internal/pattern"
@@ -23,6 +24,9 @@ type Options struct {
 	// Volume is the commit count of a darkest-shade day. 0 picks it from the
 	// busiest real day, high enough that real activity stays at level 1.
 	Volume int
+	// Ahead is how many days after today get their background in advance.
+	// GitHub counts a future-dated commit once its day arrives.
+	Ahead int
 }
 
 // Day is one cell of the planned graph.
@@ -30,9 +34,11 @@ type Day struct {
 	Date  string
 	Col   int // week column in the window
 	Row   int // weekday, 0 = Sunday
-	Real  int // contributions not made by this tool
+	Real  int // contributions already on the calendar
 	Add   int // commits this tool makes on the day
 	Level int // shade GitHub is expected to render
+	// Future marks days after today, outside the calendar GitHub returned.
+	Future bool
 }
 
 // Plan is the full graph plus the numbers it was derived from.
@@ -78,14 +84,13 @@ func Level(total, peak int) int {
 	return min((total+q-1)/q, 4)
 }
 
-// autoStep rounds an auto-picked volume, so a slightly busier real day does
-// not change it and force a full redraw.
+// autoStep rounds an auto-picked volume to a tidy number.
 const autoStep = 50
 
-// Build plans the graph. painted holds commits this tool already made per
-// date; they are part of the calendar's counts and get subtracted to recover
-// real activity.
-func Build(cal calendar.Calendar, pat pattern.Pattern, painted map[string]int, opts Options) (Plan, error) {
+// Build plans the graph, from the calendar's first day to opts.Ahead days
+// after today. The calendar must not contain an older canvas: delete that
+// repo, and wait for the total to drop, before planning a new one.
+func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, error) {
 	usable := fullPastWeeks(cal)
 	if len(usable) < pat.Width() {
 		return Plan{}, fmt.Errorf("pattern is %d weeks wide, only %d full weeks available", pat.Width(), len(usable))
@@ -98,16 +103,20 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, painted map[string]int, o
 
 	for c, week := range cal.Weeks {
 		for _, d := range week {
-			own := max(d.Count-painted[d.Date], 0)
-			p.RealMax = max(p.RealMax, own)
-			p.Days = append(p.Days, Day{Date: d.Date, Col: c, Row: d.Weekday, Real: own})
+			p.RealMax = max(p.RealMax, d.Count)
+			p.Days = append(p.Days, Day{Date: d.Date, Col: c, Row: d.Weekday, Real: d.Count})
 		}
 	}
+	future, err := ahead(p.Days[len(p.Days)-1], opts.Ahead)
+	if err != nil {
+		return Plan{}, err
+	}
+	p.Days = append(p.Days, future...)
 
 	p.Volume = opts.Volume
 	if p.Volume == 0 {
 		// Background puts real days at real+1, which must stay within level 1.
-		// The extra quarter is headroom for a busier day later in the week.
+		// The extra quarter is headroom for busier days to come.
 		p.Volume = roundUp(5*(p.RealMax+1), autoStep)
 	}
 	q := p.Volume / 4
@@ -150,6 +159,25 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, painted map[string]int, o
 	}
 
 	return p, nil
+}
+
+// ahead lists the n days after last, continuing its week columns.
+func ahead(last Day, n int) ([]Day, error) {
+	day, err := time.Parse(time.DateOnly, last.Date)
+	if err != nil {
+		return nil, fmt.Errorf("bad calendar date %q: %w", last.Date, err)
+	}
+	days := make([]Day, 0, n)
+	for k := 1; k <= n; k++ {
+		days = append(days, Day{
+			Date:   day.AddDate(0, 0, k).Format(time.DateOnly),
+			Col:    last.Col + (last.Row+k)/pattern.Rows,
+			Row:    (last.Row + k) % pattern.Rows,
+			Future: true,
+		})
+	}
+
+	return days, nil
 }
 
 // fullPastWeeks lists the columns safe to draw in: complete weeks, minus the
