@@ -1,7 +1,7 @@
 # What the contribution graph shows. Read by `contributions plan|paint|verify`.
 
 # 7 rows (Sunday first), one character per week: space is empty, ░▒▓█ are shades 1-4.
-pattern: art/ship-it.txt
+pattern: art/who-cares.txt
 
 # Give every day one commit, so days without real activity show the lightest
 # shade instead of a gap.
@@ -10,6 +10,14 @@ background: true
 # Commits on a darkest-shade day. 0 = auto: high enough that real activity stays
 # in the lightest shade.
 volume: 300
+
+# Sunday of the pattern's first column. Inside the current year it shows whole
+# in both "last 12 months" and the year's own view. Empty = centered in the window.
+start: 2026-01-04
+
+# Past years that show the pattern too, in their own view of the year selector,
+# from each year's first full week (the same spot as 2026's).
+years: [2025, 2024]
 
 # Days after today that get their background in advance. GitHub counts a
 # future-dated commit once its day arrives, so nothing has to run daily.

@@ -121,3 +121,26 @@ func TestBuildTooWide(t *testing.T) {
 		t.Error("expected an error for a pattern wider than the window")
 	}
 }
+
+func TestBuildStart(t *testing.T) {
+	cal := fakeCalendar(func(int) int { return 0 })
+	p, err := plan.Build(cal, dot(t), plan.Options{Volume: 100, Ahead: 14, Start: "2025-10-22"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Wednesday pins the column of its week; the column completes on Saturday.
+	if p.Offset != 1 || p.Complete != "2025-10-25" {
+		t.Errorf("offset %d complete %s, want 1 and 2025-10-25", p.Offset, p.Complete)
+	}
+
+	// A start inside the days ahead is fine; past them is not.
+	if p, err = plan.Build(cal, dot(t), plan.Options{Volume: 100, Ahead: 14, Start: "2026-10-18"}); err != nil {
+		t.Fatal(err)
+	}
+	if p.Complete != "2026-10-24" {
+		t.Errorf("future start completes %s, want 2026-10-24", p.Complete)
+	}
+	if _, err := plan.Build(cal, dot(t), plan.Options{Volume: 100, Ahead: 3, Start: "2026-10-18"}); err == nil {
+		t.Error("expected an error for a start past the days ahead")
+	}
+}

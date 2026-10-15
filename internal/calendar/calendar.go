@@ -39,11 +39,11 @@ func (c Calendar) NoreplyEmail() string {
 	return fmt.Sprintf("%d+%s@users.noreply.github.com", c.ID, c.Login)
 }
 
-const query = `query {
+const query = `query($from: DateTime, $to: DateTime) {
   viewer {
     login
     databaseId
-    contributionsCollection {
+    contributionsCollection(from: $from, to: $to) {
       contributionCalendar {
         weeks { contributionDays { date weekday contributionCount contributionLevel } }
       }
@@ -83,9 +83,15 @@ type response struct {
 	} `json:"errors"`
 }
 
-// Fetch loads the calendar of whoever owns the token.
-func Fetch(ctx context.Context, token string) (Calendar, error) {
-	body, err := json.Marshal(map[string]string{"query": query})
+// Fetch loads the calendar of whoever owns the token: the rolling last year
+// for year 0, otherwise that calendar year, as its own view on the profile.
+func Fetch(ctx context.Context, token string, year int) (Calendar, error) {
+	vars := map[string]any{}
+	if year != 0 {
+		vars["from"] = fmt.Sprintf("%d-01-01T00:00:00Z", year)
+		vars["to"] = fmt.Sprintf("%d-12-31T23:59:59Z", year)
+	}
+	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
 		return Calendar{}, fmt.Errorf("encode query: %w", err)
 	}

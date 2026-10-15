@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -60,15 +62,30 @@ func main() {
 	}
 }
 
-// state is everything a command needs: config, live calendar and the plan.
-type state struct {
-	cfg    config
-	cal    calendar.Calendar
-	canvas history.Canvas
-	plan   plan.Plan
+// frame is one view of the graph: the rolling last year (year 0) or a
+// calendar year from the year selector, each planned against its own calendar.
+type frame struct {
+	year int
+	cal  calendar.Calendar
+	plan plan.Plan
 }
 
-// load reads the config, fetches the calendar and builds the plan.
+func (f frame) name() string {
+	if f.year == 0 {
+		return "last 12 months"
+	}
+
+	return strconv.Itoa(f.year)
+}
+
+// state is everything a command needs: config, the planned frames, the canvas.
+type state struct {
+	cfg    config
+	frames []frame // rolling view first
+	canvas history.Canvas
+}
+
+// load reads the config, fetches every view's calendar and plans each.
 func load(ctx context.Context, cmd *cli.Command) (state, error) {
 	var s state
 	var err error
@@ -83,39 +100,104 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 	if err != nil {
 		return s, err
 	}
-	if s.cal, err = calendar.Fetch(ctx, token); err != nil {
-		return s, err
-	}
 	s.canvas = history.Canvas{Dir: canvasDir}
 
-	s.plan, err = plan.Build(s.cal, pat, plan.Options{
+	rolling := frame{}
+	if rolling.cal, err = calendar.Fetch(ctx, token, 0); err != nil {
+		return s, err
+	}
+	rolling.plan, err = plan.Build(rolling.cal, pat, plan.Options{
 		Background: s.cfg.Background,
 		Volume:     s.cfg.Volume,
 		Ahead:      s.cfg.Ahead,
+		Start:      s.cfg.Start,
 	})
+	if err != nil {
+		return s, err
+	}
+	s.frames = append(s.frames, rolling)
 
-	return s, err
+	window := map[string]bool{}
+	for _, d := range rolling.plan.Days {
+		window[d.Date] = true
+	}
+	for _, y := range s.cfg.Years {
+		f := frame{year: y}
+		if f.cal, err = calendar.Fetch(ctx, token, y); err != nil {
+			return s, err
+		}
+		// Same volume everywhere, so every view shades alike.
+		f.plan, err = plan.Build(f.cal, pat, plan.Options{
+			Background: s.cfg.Background,
+			Volume:     rolling.plan.Volume,
+			Start:      firstSunday(y),
+		})
+		if err != nil {
+			return s, fmt.Errorf("%d: %w", y, err)
+		}
+		for _, d := range f.plan.Days {
+			if d.Shade > 0 && window[d.Date] {
+				return s, fmt.Errorf("%d: the pattern reaches %s, inside the last-12-months view", y, d.Date)
+			}
+		}
+		s.frames = append(s.frames, f)
+	}
+
+	return s, nil
+}
+
+// firstSunday is the first day of a year's first full week.
+func firstSunday(year int) string {
+	d := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	for d.Weekday() != time.Sunday {
+		d = d.AddDate(0, 0, 1)
+	}
+
+	return d.Format(time.DateOnly)
+}
+
+// painted merges the frames' commits per date. Views overlap only on
+// background days, so the larger count is the one both frames asked for.
+func (s state) painted() map[string]int {
+	m := map[string]int{}
+	for _, f := range s.frames {
+		for date, n := range f.plan.Painted() {
+			m[date] = max(m[date], n)
+		}
+	}
+
+	return m
 }
 
 func (s state) author() history.Author {
+	cal := s.frames[0].cal
 	a := history.Author{Name: s.cfg.Author.Name, Email: s.cfg.Author.Email}
 	if a.Name == "" {
-		a.Name = s.cal.Login
+		a.Name = cal.Login
 	}
 	if a.Email == "" {
-		a.Email = s.cal.NoreplyEmail()
+		a.Email = cal.NoreplyEmail()
 	}
 
 	return a
 }
 
 func summarize(s state) {
-	fmt.Print(render.Text(s.plan))
-	fmt.Printf("\n@%s: volume %d, busiest real day %d, +%d commits (through %s)\n",
-		s.cal.Login, s.plan.Volume, s.plan.RealMax, s.plan.Added(), s.plan.Days[len(s.plan.Days)-1].Date)
-	for _, w := range s.plan.Warnings {
-		fmt.Println("warning:", w)
+	for _, f := range s.frames {
+		p := f.plan
+		fmt.Printf("--- %s\n%s", f.name(), render.Text(p))
+		fmt.Printf("volume %d, busiest real day %d, pattern complete on %s\n", p.Volume, p.RealMax, p.Complete)
+		for _, w := range p.Warnings {
+			fmt.Println("warning:", w)
+		}
+		fmt.Println()
 	}
+	total, last := 0, ""
+	for date, n := range s.painted() {
+		total += n
+		last = max(last, date)
+	}
+	fmt.Printf("@%s: +%d commits, through %s\n", s.frames[0].cal.Login, total, last)
 }
 
 func runPlan(ctx context.Context, cmd *cli.Command) error {
@@ -126,7 +208,7 @@ func runPlan(ctx context.Context, cmd *cli.Command) error {
 	summarize(s)
 
 	if path := cmd.String("svg"); path != "" {
-		if err := os.WriteFile(path, []byte(render.SVG(s.plan)), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(render.SVG(s.frames[0].plan)), 0o600); err != nil {
 			return fmt.Errorf("write preview: %w", err)
 		}
 		fmt.Println("preview:", path)
@@ -142,11 +224,12 @@ func runPaint(ctx context.Context, cmd *cli.Command) error {
 	}
 	summarize(s)
 
-	tip, err := s.canvas.Create(ctx, s.plan.Painted(), s.author())
+	painted := s.painted()
+	tip, err := s.canvas.Create(ctx, painted, s.author())
 	if err != nil {
 		return err
 	}
-	fmt.Printf("canvas: %d commits in %s, tip %s\n", s.plan.Added(), canvasDir, tip[:12])
+	fmt.Printf("canvas: %s in %s\n", tip[:12], canvasDir)
 
 	if !cmd.Bool("push") {
 		return nil
@@ -162,9 +245,13 @@ func runPaint(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-// runVerify checks the canvas against the live graph: every canvas commit
-// counted, and every shade what the level formula in package plan predicts.
+// runVerify checks the canvas against every live view: each canvas commit
+// counted, and each shade what the level formula in package plan predicts.
 func runVerify(ctx context.Context, cmd *cli.Command) error {
+	cfg, err := loadConfig(cmd.String("config"))
+	if err != nil {
+		return err
+	}
 	painted, err := history.Canvas{Dir: canvasDir}.Painted(ctx)
 	if err != nil {
 		return err
@@ -176,11 +263,31 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	cal, err := calendar.Fetch(ctx, token)
-	if err != nil {
-		return err
+
+	failed := 0
+	for _, year := range append([]int{0}, cfg.Years...) {
+		cal, err := calendar.Fetch(ctx, token, year)
+		if err != nil {
+			return err
+		}
+		f := frame{year: year, cal: cal}
+		off, days := check(cal, painted)
+		if off > 0 {
+			fmt.Printf("%s: %d of %d days differ\n", f.name(), off, days)
+			failed++
+		} else {
+			fmt.Printf("%s: all %d days counted and shaded as predicted\n", f.name(), days)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d views differ", failed)
 	}
 
+	return nil
+}
+
+// check compares one view with the canvas and prints every day that differs.
+func check(cal calendar.Calendar, painted map[string]int) (int, int) {
 	peak := 0
 	for _, week := range cal.Weeks {
 		for _, d := range week {
@@ -193,18 +300,14 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 		for _, d := range week {
 			days++
 			if missing := painted[d.Date] - d.Count; missing > 0 {
-				fmt.Printf("%s: %d canvas commits not counted\n", d.Date, missing)
+				fmt.Printf("  %s: %d canvas commits not counted\n", d.Date, missing)
 				off++
 			} else if want := plan.Level(d.Count, peak); d.Level != want {
-				fmt.Printf("%s: %d contributions show shade %d, formula says %d\n", d.Date, d.Count, d.Level, want)
+				fmt.Printf("  %s: %d contributions show shade %d, formula says %d\n", d.Date, d.Count, d.Level, want)
 				off++
 			}
 		}
 	}
-	if off > 0 {
-		return fmt.Errorf("%d of %d days differ", off, days)
-	}
-	fmt.Printf("all %d days counted and shaded as predicted\n", days)
 
-	return nil
+	return off, days
 }

@@ -19,6 +19,12 @@ type config struct {
 	Volume int `yaml:"volume"`
 	// Ahead is how many future days get their background in advance.
 	Ahead int `yaml:"ahead"`
+	// Start pins the pattern's first column to this date's week; empty centers
+	// it in the window.
+	Start string `yaml:"start"`
+	// Years also draws the pattern in these calendar years' own views, from
+	// each year's first full week.
+	Years []int `yaml:"years"`
 	// Canvas is the empty GitHub repo the generated history is pushed to.
 	Canvas string `yaml:"canvas"`
 	// Author overrides the identity of canvas commits. Empty fields fall back

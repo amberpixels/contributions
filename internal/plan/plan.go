@@ -10,6 +10,7 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/amberpixels/contributions/internal/calendar"
@@ -27,6 +28,10 @@ type Options struct {
 	// Ahead is how many days after today get their background in advance.
 	// GitHub counts a future-dated commit once its day arrives.
 	Ahead int
+	// Start pins the pattern's first column to the week of this date
+	// (YYYY-MM-DD). Empty centers it in the full past weeks of the window.
+	// Columns past today fill in as their days arrive.
+	Start string
 }
 
 // Day is one cell of the planned graph.
@@ -37,6 +42,7 @@ type Day struct {
 	Real  int // contributions already on the calendar
 	Add   int // commits this tool makes on the day
 	Level int // shade GitHub is expected to render
+	Shade int // the pattern's shade here, 0 outside the pattern
 	// Future marks days after today, outside the calendar GitHub returned.
 	Future bool
 }
@@ -45,7 +51,8 @@ type Day struct {
 type Plan struct {
 	Days     []Day
 	Weeks    int
-	Offset   int // first column of the pattern
+	Offset   int    // first column of the pattern
+	Complete string // date the pattern's last cell arrives
 	Volume   int
 	RealMax  int
 	Warnings []string
@@ -91,15 +98,7 @@ const autoStep = 50
 // after today. The calendar must not contain an older canvas: delete that
 // repo, and wait for the total to drop, before planning a new one.
 func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, error) {
-	usable := fullPastWeeks(cal)
-	if len(usable) < pat.Width() {
-		return Plan{}, fmt.Errorf("pattern is %d weeks wide, only %d full weeks available", pat.Width(), len(usable))
-	}
-
-	p := Plan{
-		Weeks:  len(cal.Weeks),
-		Offset: usable[0] + (len(usable)-pat.Width())/2,
-	}
+	p := Plan{Weeks: len(cal.Weeks)}
 
 	for c, week := range cal.Weeks {
 		for _, d := range week {
@@ -112,6 +111,10 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, erro
 		return Plan{}, err
 	}
 	p.Days = append(p.Days, future...)
+
+	if p.Offset, p.Complete, err = place(cal, pat, p.Days, opts.Start); err != nil {
+		return Plan{}, err
+	}
 
 	p.Volume = opts.Volume
 	if p.Volume == 0 {
@@ -136,6 +139,7 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, erro
 		if col := d.Col - p.Offset; col >= 0 && col < pat.Width() {
 			want = pat.Cells[d.Row][col]
 		}
+		d.Shade = want
 
 		switch {
 		case want == 4:
@@ -159,6 +163,33 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, erro
 	}
 
 	return p, nil
+}
+
+// place picks the pattern's first column and the date its last cell arrives.
+func place(cal calendar.Calendar, pat pattern.Pattern, days []Day, start string) (int, string, error) {
+	var offset int
+	if start == "" {
+		usable := fullPastWeeks(cal)
+		if len(usable) < pat.Width() {
+			return 0, "", fmt.Errorf("pattern is %d weeks wide, only %d full weeks available", pat.Width(), len(usable))
+		}
+		offset = usable[0] + (len(usable)-pat.Width())/2
+	} else {
+		i := slices.IndexFunc(days, func(d Day) bool { return d.Date == start })
+		if i < 0 {
+			return 0, "", fmt.Errorf("start %s is outside the window and the days ahead", start)
+		}
+		offset = days[i].Col
+	}
+
+	last := offset + pat.Width() - 1
+	for _, d := range days {
+		if d.Col == last && d.Row == pattern.Rows-1 {
+			return offset, d.Date, nil
+		}
+	}
+
+	return 0, "", errors.New("pattern ends past the last planned day; raise ahead")
 }
 
 // ahead lists the n days after last, continuing its week columns.

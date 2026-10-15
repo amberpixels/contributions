@@ -47,6 +47,9 @@ tidy:
     go mod tidy
     cd tools && go mod tidy
 
+# The canvas repo, as in contributions.yml
+canvas := "amberpixels/empty-spaces"
+
 # Show what the graph would look like and write preview.svg - changes nothing
 plan:
     go run ./cmd/contributions plan --svg preview.svg
@@ -58,3 +61,15 @@ paint:
 # Check GitHub counted the whole canvas and shades as predicted
 verify:
     go run ./cmd/contributions verify
+
+# Wait for the contributions total to drop before painting again.
+[doc("Delete the canvas repo (erasing its contributions), recreate it empty, drop .canvas")]
+[confirm("Delete amberpixels/empty-spaces and erase all its contributions?")]
+canvas--reset:      # <- call with: j canvas:reset
+    gh repo delete {{ canvas }} --yes
+    gh repo create {{ canvas }} --public
+    rm -rf .canvas
+
+# Open the pattern editor in the browser
+edit:
+    open editor.html

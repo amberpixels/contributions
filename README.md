@@ -27,9 +27,9 @@ Measured, not documented, so `verify` exists to catch changes:
 - **Force-pushing commits away does not un-count them**, not even two days
   later. **Deleting the repo does**, within minutes.
 
-So a redraw is: delete the canvas repo on GitHub, wait for the total to drop,
-recreate it empty, `paint --push` again. `paint --push` refuses a canvas repo
-that is not empty.
+So a redraw is: `j canvas:reset` (deletes and recreates the canvas repo),
+wait for the total to drop, `paint --push` again. `paint --push` refuses a
+canvas repo that is not empty.
 
 ## How it draws
 
@@ -38,23 +38,36 @@ shade 1 as long as it is below `volume/4`. With `background: true` every day,
 including the next `ahead` days, also gets one commit, so the graph has no
 gaps. Real activity can only be outshone, never hidden.
 
-The pattern is centered in the full past weeks of today's window. The window
-moves a column every Sunday and the pattern moves with it, sliding left until it
-falls off the edge.
+Without `start`, the pattern is centered in the full past weeks of today's
+window. With `start`, its first column is that date's week; columns past today
+fill in as their days arrive.
+
+Each view is shaded against its own busiest day, so a label only reads right
+in the views that contain all of it. A label inside the current year, from its
+first full week, is whole in both "last 12 months" and that year's view. `years`
+draws the same label in past years' views, at the same spot, and `plan` refuses
+one that would reach into the last-12-months window. The rolling view moves a
+column every Sunday, so its label slides left and, in the next year, off the
+edge.
 
 ## Config
 
 `contributions.yml`:
 
 ```yaml
-pattern: art/ship-it.txt   # 7 rows, Sunday first; space = empty, ░▒▓█ = shades 1-4
+pattern: art/who-cares.txt # 7 rows, Sunday first; space = empty, ░▒▓█ = shades 1-4
 background: true           # one commit on every day
 volume: 300                # commits on a darkest day; 0 = auto from the busiest real day
+start: 2026-01-04          # first column's week; empty = centered in the window
+years: [2025, 2024]        # past years' views that show the pattern too
 ahead: 365                 # future days that get their background in advance
 canvas: git@github.com:amberpixels/empty-spaces.git
 ```
 
 `author.name` / `author.email` default to the GitHub login and its noreply
 address. The email must be one GitHub links to the account, or nothing counts.
+
+`j edit` opens `editor.html`, a grid editor in GitHub's colors that reads and
+writes this pattern format.
 
 The calendar is read with `CONTRIBUTIONS_TOKEN`, `GITHUB_TOKEN` or `gh auth token`.
