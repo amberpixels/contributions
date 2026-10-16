@@ -126,6 +126,17 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 		if f.cal, err = calendar.Fetch(ctx, token, y); err != nil {
 			return s, err
 		}
+		// The header visitors read can differ from the API's sum of days, by
+		// real activity only: canvas commits sit at noon UTC and count alike in
+		// both. Aim the API's sum so the header lands on the total.
+		total := s.cfg.Totals[y]
+		if total > 0 {
+			header, err := calendar.PublicTotal(ctx, rolling.cal.Login, y)
+			if err != nil {
+				return s, err
+			}
+			total -= header - count(f.cal)
+		}
 		// Same volume everywhere, so every view shades alike, unless a total
 		// needs more. Days the rolling view shows too get no filler: at this
 		// view's higher volume it would show darker there.
@@ -133,7 +144,7 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 			Background: s.cfg.Background,
 			Volume:     rolling.plan.Volume,
 			Start:      firstSunday(y),
-			Total:      s.cfg.Totals[y],
+			Total:      total,
 			Fixed:      window,
 		})
 		if err != nil {
@@ -277,8 +288,12 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 		}
 		f := frame{year: year, cal: cal}
 		if want, ok := cfg.Totals[year]; ok {
-			if got := count(cal); got != want {
-				fmt.Printf("%s: %d contributions, want %d\n", f.name(), got, want)
+			got, err := calendar.PublicTotal(ctx, cal.Login, year)
+			if err != nil {
+				return err
+			}
+			if got != want {
+				fmt.Printf("%s: visitors see %d contributions, want %d\n", f.name(), got, want)
 				failed++
 			}
 		}
@@ -297,7 +312,7 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-// count is the view's total, the number in its "N contributions in" header.
+// count is the view's total as the API reports it.
 func count(cal calendar.Calendar) int {
 	n := 0
 	for _, week := range cal.Weeks {

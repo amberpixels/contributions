@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -132,6 +135,41 @@ func Fetch(ctx context.Context, token string, year int) (Calendar, error) {
 	}
 
 	return cal, nil
+}
+
+// PublicTotal reads the "N contributions in YEAR" header of a year's view as a
+// logged-out visitor sees it. It can differ from the API's sum of days: private
+// contributions the token cannot read, and real activity near midnight that the
+// page files under another day, possibly another year.
+func PublicTotal(ctx context.Context, login string, year int) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("https://github.com/users/%s/contributions?from=%d-01-01&to=%d-12-31", login, year, year)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("fetch %d profile view: %w", year, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("fetch %d profile view: %s", year, resp.Status)
+	}
+	page, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read %d profile view: %w", year, err)
+	}
+
+	header := regexp.MustCompile(`([\d,]+)\s+contributions?\s+in\s+` + strconv.Itoa(year))
+	m := header.FindSubmatch(page)
+	if m == nil {
+		return 0, fmt.Errorf("no contributions header in the %d profile view", year)
+	}
+
+	return strconv.Atoi(strings.ReplaceAll(string(m[1]), ",", ""))
 }
 
 // attempts bounds retries of GitHub's occasional 502/504 on this query.
