@@ -19,6 +19,12 @@ start: 2026-01-04
 # from each year's first full week (the same spot as 2026's).
 years: [2025, 2024]
 
+# Exact contribution counts for past years' views. Filler commits keep every
+# shade; the year's volume rises if the count needs it.
+totals:
+  2024: 66777
+  2025: 77666
+
 # Days after today that get their background in advance. GitHub counts a
 # future-dated commit once its day arrives, so nothing has to run daily.
 ahead: 365

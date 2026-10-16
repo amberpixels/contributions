@@ -32,6 +32,12 @@ type Options struct {
 	// (YYYY-MM-DD). Empty centers it in the full past weeks of the window.
 	// Columns past today fill in as their days arrive.
 	Start string
+	// Total, when set, is the exact sum the window's days must reach. Volume
+	// is raised until the days can hold it, and the commits the drawing leaves
+	// short are spread over the days as filler that keeps every shade.
+	Total int
+	// Fixed lists days that get no filler, such as days another view shows too.
+	Fixed map[string]bool
 }
 
 // Day is one cell of the planned graph.
@@ -63,6 +69,16 @@ func (p Plan) Added() int {
 	n := 0
 	for _, d := range p.Days {
 		n += d.Add
+	}
+
+	return n
+}
+
+// Count is the window's total contributions once the plan is painted.
+func (p Plan) Count() int {
+	n := 0
+	for _, d := range p.Days {
+		n += d.Real + d.Add
 	}
 
 	return n
@@ -122,47 +138,120 @@ func Build(cal calendar.Calendar, pat pattern.Pattern, opts Options) (Plan, erro
 		// The extra quarter is headroom for busier days to come.
 		p.Volume = roundUp(5*(p.RealMax+1), autoStep)
 	}
-	q := p.Volume / 4
-	if q == 0 {
+	if p.Volume/4 == 0 {
 		return Plan{}, errors.New("volume must be at least 4")
 	}
+
+	draw(&p, pat, opts.Background)
+	if opts.Total > 0 {
+		if err := fill(&p, pat, opts); err != nil {
+			return Plan{}, err
+		}
+	}
+
+	q := p.Volume / 4
 	if p.RealMax+1 > q {
 		p.Warnings = append(p.Warnings, fmt.Sprintf(
 			"busiest real day has %d contributions; at volume %d anything above %d shows darker than the background",
 			p.RealMax, p.Volume, q-1))
 	}
-
 	peak := 0
-	for i := range p.Days {
-		d := &p.Days[i]
-		want := 0
-		if col := d.Col - p.Offset; col >= 0 && col < pat.Width() {
-			want = pat.Cells[d.Row][col]
-		}
-		d.Shade = want
-
-		switch {
-		case want == 4:
-			d.Add = max(p.Volume-d.Real, 0)
-		case want > 0:
-			// Aim at the middle of the level's band, away from both edges.
-			target := (2*want - 1) * q / 2
-			d.Add = max(target-d.Real, 0)
-			if d.Real > want*q {
-				p.Warnings = append(p.Warnings, fmt.Sprintf(
-					"%s: %d real contributions already exceed shade %d", d.Date, d.Real, want))
-			}
-		case opts.Background:
-			d.Add = 1
+	for _, d := range p.Days {
+		if d.Shade > 0 && d.Shade < 4 && d.Real > d.Shade*q {
+			p.Warnings = append(p.Warnings, fmt.Sprintf(
+				"%s: %d real contributions already exceed shade %d", d.Date, d.Real, d.Shade))
 		}
 		peak = max(peak, d.Real+d.Add)
 	}
-
 	for i := range p.Days {
 		p.Days[i].Level = Level(p.Days[i].Real+p.Days[i].Add, peak)
 	}
 
 	return p, nil
+}
+
+// draw sets each day's shade and the commits it needs at the plan's volume.
+func draw(p *Plan, pat pattern.Pattern, background bool) {
+	q := p.Volume / 4
+	for i := range p.Days {
+		d := &p.Days[i]
+		d.Shade, d.Add = 0, 0
+		if col := d.Col - p.Offset; col >= 0 && col < pat.Width() {
+			d.Shade = pat.Cells[d.Row][col]
+		}
+
+		switch {
+		case d.Shade == 4:
+			d.Add = max(p.Volume-d.Real, 0)
+		case d.Shade > 0:
+			// Aim at the middle of the level's band, away from both edges.
+			target := (2*d.Shade - 1) * q / 2
+			d.Add = max(target-d.Real, 0)
+		case background:
+			d.Add = 1
+		}
+	}
+}
+
+// fill brings the window to exactly opts.Total. Each lit day below the darkest
+// shade has room up to the top of its shade's band; the volume is raised until
+// that room holds what the drawing leaves short, which is then spread over the
+// days in proportion to their room, so no day is pushed to its band's edge.
+func fill(p *Plan, pat pattern.Pattern, opts Options) error {
+	for ; p.Volume <= opts.Total; p.Volume += autoStep {
+		draw(p, pat, opts.Background)
+		short := opts.Total - p.Count()
+		if short < 0 {
+			return fmt.Errorf(
+				"total %d is below the %d the drawing takes at volume %d",
+				opts.Total,
+				p.Count(),
+				p.Volume,
+			)
+		}
+
+		q := p.Volume / 4
+		room := make([]int, len(p.Days))
+		sum := 0
+		for i, d := range p.Days {
+			top := 0
+			switch {
+			case opts.Fixed[d.Date], d.Shade == 4:
+			case d.Shade > 0:
+				top = d.Shade * q
+			case d.Real+d.Add > 0:
+				top = q
+			}
+			room[i] = max(top-d.Real-d.Add, 0)
+			sum += room[i]
+		}
+		if short > sum {
+			continue
+		}
+
+		// Shares round down, each by less than one, so one more commit on
+		// that many days settles the rest without leaving any day's room.
+		given := 0
+		for i, r := range room {
+			n := short * r / max(sum, 1)
+			p.Days[i].Add += n
+			room[i] -= n
+			given += n
+		}
+		for i := range p.Days {
+			if given == short {
+				break
+			}
+			if room[i] > 0 {
+				p.Days[i].Add++
+				given++
+			}
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("total %d is out of reach: the days have no room to hold it", opts.Total)
 }
 
 // place picks the pattern's first column and the date its last cell arrives.

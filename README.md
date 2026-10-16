@@ -50,6 +50,14 @@ one that would reach into the last-12-months window. The rolling view moves a
 column every Sunday, so its label slides left and, in the next year, off the
 edge.
 
+`totals` pins a past year's "N contributions in" number. Every shade is a band
+(at volume 300, a background day holds 1 to 75 and stays lightest), so the
+missing commits are spread over the days in proportion to the room left in
+their band, and no day changes shade. If the room is not enough, that year's
+volume rises in steps of 50. Days the rolling view also shows get no filler,
+since they would show darker there. Only finished years: the current one keeps
+moving.
+
 ## Config
 
 `contributions.yml`:
@@ -60,6 +68,7 @@ background: true           # one commit on every day
 volume: 300                # commits on a darkest day; 0 = auto from the busiest real day
 start: 2026-01-04          # first column's week; empty = centered in the window
 years: [2025, 2024]        # past years' views that show the pattern too
+totals: {2024: 66777, 2025: 77666} # exact counts for past years' views
 ahead: 365                 # future days that get their background in advance
 canvas: git@github.com:amberpixels/empty-spaces.git
 ```

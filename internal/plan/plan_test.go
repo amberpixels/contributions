@@ -144,3 +144,43 @@ func TestBuildStart(t *testing.T) {
 		t.Error("expected an error for a start past the days ahead")
 	}
 }
+
+func TestBuildTotal(t *testing.T) {
+	cal := fakeCalendar(func(i int) int { return i % 11 })
+	fixed := map[string]bool{"2025-10-12": true}
+	plain, err := plan.Build(cal, dot(t), plan.Options{Background: true, Volume: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, total := range []int{plain.Count(), 5000, 66777} {
+		p, err := plan.Build(cal, dot(t), plan.Options{Background: true, Volume: 100, Total: total, Fixed: fixed})
+		if err != nil {
+			t.Fatalf("total %d: %v", total, err)
+		}
+		if p.Count() != total {
+			t.Errorf("total %d: count %d", total, p.Count())
+		}
+		// Filler must not change a single shade, at whatever volume it took.
+		ref, err := plan.Build(cal, dot(t), plan.Options{Background: true, Volume: p.Volume})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, d := range p.Days {
+			if d.Level != ref.Days[i].Level {
+				t.Errorf("total %d, %s: level %d, want %d", total, d.Date, d.Level, ref.Days[i].Level)
+			}
+			if fixed[d.Date] && d.Add != ref.Days[i].Add {
+				t.Errorf("total %d: fixed day %s got filler", total, d.Date)
+			}
+		}
+	}
+
+	if _, err := plan.Build(
+		cal,
+		dot(t),
+		plan.Options{Background: true, Volume: 100, Total: plain.Count() - 1},
+	); err == nil {
+		t.Error("expected an error for a total below what the drawing takes")
+	}
+}

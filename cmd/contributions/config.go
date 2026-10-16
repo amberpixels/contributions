@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -25,6 +27,9 @@ type config struct {
 	// Years also draws the pattern in these calendar years' own views, from
 	// each year's first full week.
 	Years []int `yaml:"years"`
+	// Totals pins a past year's view to an exact contribution count. The year
+	// must be one of Years.
+	Totals map[int]int `yaml:"totals"`
 	// Canvas is the empty GitHub repo the generated history is pushed to.
 	Canvas string `yaml:"canvas"`
 	// Author overrides the identity of canvas commits. Empty fields fall back
@@ -50,6 +55,18 @@ func loadConfig(path string) (config, error) {
 	}
 	if c.Volume < 0 || c.Ahead < 0 {
 		return c, errors.New("config: volume and ahead must not be negative")
+	}
+
+	for y, n := range c.Totals {
+		if !slices.Contains(c.Years, y) {
+			return c, fmt.Errorf("config: totals has %d, which is not in years", y)
+		}
+		if y >= time.Now().Year() {
+			return c, fmt.Errorf("config: %d is not over yet; only a past year's total stays put", y)
+		}
+		if n <= 0 {
+			return c, fmt.Errorf("config: total for %d must be positive", y)
+		}
 	}
 
 	return c, nil

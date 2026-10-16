@@ -126,11 +126,15 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 		if f.cal, err = calendar.Fetch(ctx, token, y); err != nil {
 			return s, err
 		}
-		// Same volume everywhere, so every view shades alike.
+		// Same volume everywhere, so every view shades alike, unless a total
+		// needs more. Days the rolling view shows too get no filler: at this
+		// view's higher volume it would show darker there.
 		f.plan, err = plan.Build(f.cal, pat, plan.Options{
 			Background: s.cfg.Background,
 			Volume:     rolling.plan.Volume,
 			Start:      firstSunday(y),
+			Total:      s.cfg.Totals[y],
+			Fixed:      window,
 		})
 		if err != nil {
 			return s, fmt.Errorf("%d: %w", y, err)
@@ -186,7 +190,8 @@ func summarize(s state) {
 	for _, f := range s.frames {
 		p := f.plan
 		fmt.Printf("--- %s\n%s", f.name(), render.Text(p))
-		fmt.Printf("volume %d, busiest real day %d, pattern complete on %s\n", p.Volume, p.RealMax, p.Complete)
+		fmt.Printf("%d contributions, volume %d, busiest real day %d, pattern complete on %s\n",
+			p.Count(), p.Volume, p.RealMax, p.Complete)
 		for _, w := range p.Warnings {
 			fmt.Println("warning:", w)
 		}
@@ -271,6 +276,12 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 			return err
 		}
 		f := frame{year: year, cal: cal}
+		if want, ok := cfg.Totals[year]; ok {
+			if got := count(cal); got != want {
+				fmt.Printf("%s: %d contributions, want %d\n", f.name(), got, want)
+				failed++
+			}
+		}
 		off, days := check(cal, painted)
 		if off > 0 {
 			fmt.Printf("%s: %d of %d days differ\n", f.name(), off, days)
@@ -280,10 +291,22 @@ func runVerify(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d views differ", failed)
+		return fmt.Errorf("%d checks failed", failed)
 	}
 
 	return nil
+}
+
+// count is the view's total, the number in its "N contributions in" header.
+func count(cal calendar.Calendar) int {
+	n := 0
+	for _, week := range cal.Weeks {
+		for _, d := range week {
+			n += d.Count
+		}
+	}
+
+	return n
 }
 
 // check compares one view with the canvas and prints every day that differs.
