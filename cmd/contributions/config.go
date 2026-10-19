@@ -27,6 +27,9 @@ type config struct {
 	// Years also draws the pattern in these calendar years' own views, from
 	// each year's first full week.
 	Years []int `yaml:"years"`
+	// Patterns gives a past year its own pattern file instead of Pattern. The
+	// year must be one of Years.
+	Patterns map[int]string `yaml:"patterns"`
 	// Totals pins a past year's view to an exact contribution count. The year
 	// must be one of Years.
 	Totals map[int]int `yaml:"totals"`
@@ -57,6 +60,11 @@ func loadConfig(path string) (config, error) {
 		return c, errors.New("config: volume and ahead must not be negative")
 	}
 
+	for y := range c.Patterns {
+		if !slices.Contains(c.Years, y) {
+			return c, fmt.Errorf("config: patterns has %d, which is not in years", y)
+		}
+	}
 	for y, n := range c.Totals {
 		if !slices.Contains(c.Years, y) {
 			return c, fmt.Errorf("config: totals has %d, which is not in years", y)

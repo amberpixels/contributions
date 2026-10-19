@@ -140,7 +140,13 @@ func load(ctx context.Context, cmd *cli.Command) (state, error) {
 		// Same volume everywhere, so every view shades alike, unless a total
 		// needs more. Days the rolling view shows too get no filler: at this
 		// view's higher volume it would show darker there.
-		f.plan, err = plan.Build(f.cal, pat, plan.Options{
+		yearPat := pat
+		if path := s.cfg.Patterns[y]; path != "" {
+			if yearPat, err = pattern.Load(path); err != nil {
+				return s, fmt.Errorf("%d: %w", y, err)
+			}
+		}
+		f.plan, err = plan.Build(f.cal, yearPat, plan.Options{
 			Background: s.cfg.Background,
 			Volume:     rolling.plan.Volume,
 			Start:      firstSunday(y),

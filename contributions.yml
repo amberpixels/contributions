@@ -19,6 +19,12 @@ start: 2026-01-04
 # from each year's first full week (the same spot as 2026's).
 years: [2025, 2024]
 
+# A past year's own pattern instead of the one above. It has to end before the
+# last-12-months view begins.
+patterns:
+  2025: art/cmon-man.txt
+  2024: art/seriously.txt
+
 # Exact contribution counts for past years' views. Filler commits keep every
 # shade; the year's volume rises if the count needs it.
 totals:

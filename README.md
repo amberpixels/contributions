@@ -45,8 +45,9 @@ fill in as their days arrive.
 Each view is shaded against its own busiest day, so a label only reads right
 in the views that contain all of it. A label inside the current year, from its
 first full week, is whole in both "last 12 months" and that year's view. `years`
-draws the same label in past years' views, at the same spot, and `plan` refuses
-one that would reach into the last-12-months window. The rolling view moves a
+draws the same label in past years' views, at the same spot, and `patterns`
+gives a year a label of its own. `plan` refuses one that would reach into the
+last-12-months window. The rolling view moves a
 column every Sunday, so its label slides left and, in the next year, off the
 edge.
 
@@ -68,6 +69,7 @@ background: true           # one commit on every day
 volume: 300                # commits on a darkest day; 0 = auto from the busiest real day
 start: 2026-01-04          # first column's week; empty = centered in the window
 years: [2025, 2024]        # past years' views that show the pattern too
+patterns: {2025: art/cmon-man.txt} # a year's own label instead of `pattern`
 totals: {2024: 66777, 2025: 77666} # exact counts for past years' views
 ahead: 365                 # future days that get their background in advance
 canvas: git@github.com:amberpixels/empty-spaces.git
